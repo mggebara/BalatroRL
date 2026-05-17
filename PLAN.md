@@ -11,11 +11,26 @@ Update the **Status** section as phases complete.
 
 ## Status
 
-- **Current phase:** Phase 0 — Planning (this document).
+- **Current phase:** Phase 1 — Rules core skeleton, in progress.
 - **Last updated:** 2026-05-17
-- **Next concrete task:** Phase 1, step 1 — scaffold `balatro_core/` package
-  with deck, card, hand-eval, and scoring for the 12 hand types; CLI smoke test
-  on a scripted Ante 1.
+- **Completed:**
+  - `balatro_core/` package scaffolded: cards, hands, scoring, engine.
+  - All 12 hand types detected and scored at level 1; level scaling
+    implemented and tested at levels 2, 3, 5.
+  - Engine: `Run` / `Round` / `Blind` with play/discard/draw and per-ante
+    chip targets (Ante 1-8).
+  - 36 pytest tests passing (18 hand-evaluation, 13 scoring scenarios
+    covering every hand type, 5 hand-level value tests).
+  - `scripts/smoke_ante1.py` plays a scripted Ante 1 end-to-end with a
+    brute-force greedy + simple discard heuristic. Beats Ante 1 on
+    several test seeds (e.g. 1, 42); loses on others (e.g. 7, 13, 100) —
+    which is expected for a non-RL agent and confirms the engine handles
+    both win and loss paths.
+- **Next concrete task:** Phase 1 wrap-up — decide whether to expand the
+  rules core (booster/shop stubs, money/interest) before moving to
+  Phase 2 (RNG parity + first 20 jokers). The current core is a solid
+  base for Phase 2; the shop stubs are deferrable until Phase 3 when the
+  Gym adapter starts needing them.
 
 When resuming, read this section first, then the **Phase Plan** section
 to find the active phase.
