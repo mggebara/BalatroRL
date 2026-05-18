@@ -1,23 +1,26 @@
 """Flat observation encoder for the Balatro env.
 
-Phase 3 takes the deliberately simple route from PLAN.md: pad-to-max
-fixed-size tensors with histogram aggregates for variable-length
-structure (deck composition). A Transformer encoder over jokers/deck
+Pad-to-max fixed-size tensors with histogram aggregates for
+variable-length structure. A Transformer encoder over jokers/deck
 arrives in Phase 6.
 
 Layout (lengths, sum = OBS_DIM):
   8 * 18  hand: per-slot (rank one-hot[13] + suit one-hot[4] + present[1])
-  8        selection mask (0/1 per slot)
+  8        selection mask
   2        (hands_remaining, discards_remaining) / max
-  3        (total_score / chip_target, blind_progress_log, chip_target / 50000)
-  8        ante one-hot (1..8)
-  3        blind one-hot (small/big/boss)
-  5 * 21   joker slots: per-slot (id one-hot[20] + present[1])
-  12       hand-type level (current level / 10, clipped)
-  13       deck rank histogram (count / 52)
-  4        deck suit histogram (count / 52)
+  3        score: (progress, log score, target/50000)
+  8        ante one-hot
+  3        blind one-hot
+  5        stage one-hot (PRE_BLIND / IN_ROUND / IN_SHOP / GAME_WON / GAME_OVER)
+  1        money / 50, clipped to [0, 2]
+  5 * 21   joker slots (id one-hot[20] + present[1])
+  12       hand-type levels (level/10 clipped)
+  13       deck rank histogram
+  4        deck suit histogram
+  2 * 22   shop slots: per-slot (id one-hot[20] + present[1] + price/20)
+  1        reroll cost / 20
 
-Total: 144 + 8 + 2 + 3 + 8 + 3 + 105 + 12 + 13 + 4 = 302
+Total: 144+8+2+3+8+3+5+1+105+12+13+4+44+1 = 353
 """
 from __future__ import annotations
 
@@ -26,11 +29,11 @@ import math
 import numpy as np
 
 from balatro_core.cards import Card, Deck, Rank, Suit
-from balatro_core.engine import ANTE_BASE_CHIPS, BlindKind, RoundState, Run
+from balatro_core.engine import ANTE_BASE_CHIPS, BlindKind, GameStage, RoundState, Run
 from balatro_core.hands import HandType
 from balatro_core.jokers import JOKER_CLASSES, Joker
 
-from balatro_env.action_space import MAX_HAND_SIZE
+from balatro_env.action_space import MAX_HAND_SIZE, MAX_SHOP_SLOTS
 
 NUM_RANKS = 13
 NUM_SUITS = 4
@@ -38,25 +41,32 @@ NUM_JOKER_SLOTS = 5
 NUM_JOKER_IDS = len(JOKER_CLASSES)  # 20
 NUM_HAND_TYPES = len(HandType)      # 12
 NUM_BLINDS = len(BlindKind)         # 3
+NUM_STAGES = len(GameStage)         # 5
 MAX_ANTE = 8
 
 HAND_CARD_DIM = NUM_RANKS + NUM_SUITS + 1                  # 18
 HAND_SECTION = MAX_HAND_SIZE * HAND_CARD_DIM               # 144
 SELECTION_SECTION = MAX_HAND_SIZE                          # 8
-COUNTS_SECTION = 2                                         # hands/discards remaining
-SCORE_SECTION = 3                                          # progress, log score, target
+COUNTS_SECTION = 2
+SCORE_SECTION = 3
 ANTE_SECTION = MAX_ANTE                                    # 8
 BLIND_SECTION = NUM_BLINDS                                 # 3
+STAGE_SECTION = NUM_STAGES                                 # 5
+MONEY_SECTION = 1
 JOKER_CARD_DIM = NUM_JOKER_IDS + 1                         # 21
 JOKER_SECTION = NUM_JOKER_SLOTS * JOKER_CARD_DIM           # 105
 HAND_LEVEL_SECTION = NUM_HAND_TYPES                        # 12
 DECK_RANK_HIST = NUM_RANKS                                 # 13
 DECK_SUIT_HIST = NUM_SUITS                                 # 4
+SHOP_SLOT_DIM = NUM_JOKER_IDS + 2                          # id + present + price = 22
+SHOP_SECTION = MAX_SHOP_SLOTS * SHOP_SLOT_DIM              # 44
+REROLL_SECTION = 1
 
 OBS_DIM = (
     HAND_SECTION + SELECTION_SECTION + COUNTS_SECTION + SCORE_SECTION
-    + ANTE_SECTION + BLIND_SECTION + JOKER_SECTION
-    + HAND_LEVEL_SECTION + DECK_RANK_HIST + DECK_SUIT_HIST
+    + ANTE_SECTION + BLIND_SECTION + STAGE_SECTION + MONEY_SECTION
+    + JOKER_SECTION + HAND_LEVEL_SECTION + DECK_RANK_HIST + DECK_SUIT_HIST
+    + SHOP_SECTION + REROLL_SECTION
 )
 
 # Stable mapping from joker class -> id index.
@@ -65,6 +75,7 @@ _JOKER_ID: dict[type[Joker], int] = {cls: i for i, cls in enumerate(JOKER_CLASSE
 _RANK_TO_IDX: dict[Rank, int] = {r: i for i, r in enumerate(Rank)}
 _SUIT_TO_IDX: dict[Suit, int] = {s: i for i, s in enumerate(Suit)}
 _BLIND_TO_IDX: dict[BlindKind, int] = {b: i for i, b in enumerate(BlindKind)}
+_STAGE_TO_IDX: dict[GameStage, int] = {s: i for i, s in enumerate(GameStage)}
 
 
 def _encode_card(card: Card | None) -> np.ndarray:
@@ -132,6 +143,14 @@ def encode_observation(
     out[cursor + _BLIND_TO_IDX[blind]] = 1.0
     cursor += BLIND_SECTION
 
+    # Stage one-hot.
+    out[cursor + _STAGE_TO_IDX[run.stage]] = 1.0
+    cursor += STAGE_SECTION
+
+    # Money (normalized; clipped at 2 = $100).
+    out[cursor] = max(0.0, min(run.money / 50.0, 2.0))
+    cursor += MONEY_SECTION
+
     # Joker slots (pad with empties).
     for slot in range(NUM_JOKER_SLOTS):
         joker = run.jokers[slot] if slot < len(run.jokers) else None
@@ -159,6 +178,24 @@ def encode_observation(
     for i in range(NUM_SUITS):
         out[cursor + i] /= n
     cursor += DECK_SUIT_HIST
+
+    # Shop slots. If not in shop, leave zeros.
+    shop = run.current_shop
+    for slot in range(MAX_SHOP_SLOTS):
+        if shop is not None and slot < shop.slot_count:
+            shop_slot = shop.slots[slot]
+            if shop_slot.joker is not None:
+                idx = _JOKER_ID.get(type(shop_slot.joker))
+                if idx is not None:
+                    out[cursor + idx] = 1.0
+                out[cursor + NUM_JOKER_IDS] = 1.0
+                out[cursor + NUM_JOKER_IDS + 1] = min(shop_slot.price / 20.0, 1.0)
+        cursor += SHOP_SLOT_DIM
+
+    # Reroll cost.
+    if shop is not None:
+        out[cursor] = min(shop.reroll_cost / 20.0, 1.0)
+    cursor += REROLL_SECTION
 
     assert cursor == OBS_DIM, f"obs cursor mismatch: {cursor} != {OBS_DIM}"
     return out

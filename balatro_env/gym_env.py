@@ -26,12 +26,17 @@ from balatro_core.engine import BlindKind, GameStage, Run
 from balatro_core.jokers import Joker
 
 from balatro_env.action_space import (
+    BUY_SHOP_ACTION_BASE,
     DISCARD_ACTION,
+    LEAVE_SHOP_ACTION,
     MAX_HAND_SIZE,
+    MAX_SHOP_SLOTS,
     NUM_ACTIONS,
     PLAY_ACTION,
+    REROLL_SHOP_ACTION,
     ActionKind,
-    compute_mask,
+    compute_round_mask,
+    compute_shop_mask,
     decode_action,
 )
 from balatro_env.obs_encoder import OBS_DIM, encode_observation
@@ -109,6 +114,12 @@ class BalatroEnv(gym.Env):
             info.update(info_play)
         elif kind == ActionKind.DISCARD:
             self._do_discard()
+        elif kind == ActionKind.LEAVE_SHOP:
+            self._do_leave_shop()
+        elif kind == ActionKind.REROLL_SHOP:
+            self._do_reroll_shop()
+        elif kind == ActionKind.BUY_SHOP:
+            self._do_buy_shop(idx)
 
         if self._run is not None and self._run.is_terminal:
             self._terminated = True
@@ -144,16 +155,37 @@ class BalatroEnv(gym.Env):
         return np.array(self._current_mask(), dtype=bool)
 
     def _current_mask(self) -> list[bool]:
-        if self._run is None or self._run.current_round is None or self._terminated:
+        if self._run is None or self._terminated:
             return [False] * NUM_ACTIONS
-        rd = self._run.current_round
-        return compute_mask(
-            hand_size=len(rd.state.hand),
-            selection=list(self._selection),
-            selection_count=sum(self._selection[: len(rd.state.hand)]),
-            hands_remaining=rd.state.hands_remaining,
-            discards_remaining=rd.state.discards_remaining,
-        )
+        if self._run.stage == GameStage.IN_ROUND and self._run.current_round is not None:
+            rd = self._run.current_round
+            return compute_round_mask(
+                hand_size=len(rd.state.hand),
+                selection=list(self._selection),
+                selection_count=sum(self._selection[: len(rd.state.hand)]),
+                hands_remaining=rd.state.hands_remaining,
+                discards_remaining=rd.state.discards_remaining,
+            )
+        if self._run.stage == GameStage.IN_SHOP and self._run.current_shop is not None:
+            shop = self._run.current_shop
+            filled = [
+                slot.joker is not None
+                for slot in shop.slots[:MAX_SHOP_SLOTS]
+            ]
+            # Pad to MAX_SHOP_SLOTS if shop is smaller.
+            filled = filled + [False] * (MAX_SHOP_SLOTS - len(filled))
+            prices = [
+                slot.price for slot in shop.slots[:MAX_SHOP_SLOTS]
+            ]
+            prices = prices + [0] * (MAX_SHOP_SLOTS - len(prices))
+            return compute_shop_mask(
+                money=self._run.money,
+                joker_slots_free=self._run.max_joker_slots - len(self._run.jokers),
+                shop_slot_filled=filled,
+                shop_slot_prices=prices,
+                reroll_cost=shop.reroll_cost,
+            )
+        return [False] * NUM_ACTIONS
 
     # ---- internals ----
 
@@ -178,12 +210,9 @@ class BalatroEnv(gym.Env):
             "play_chips": result.chips,
             "play_mult": result.mult,
         }
-        # Round transition: won, lost, or continue.
+        # Round transition: won (-> shop), lost (-> game over), or continue.
         if rd.state.is_won:
-            self._run.stage = GameStage.ROUND_WON
             self._run.advance_after_round_win()
-            if self._run.stage == GameStage.PRE_BLIND:
-                self._run.start_current_blind()
         elif rd.state.is_lost:
             self._run.handle_round_loss()
         return reward, info
@@ -193,6 +222,20 @@ class BalatroEnv(gym.Env):
         idx = self._selected_indices()
         self._run.current_round.discard(idx)
         self._selection = [False] * MAX_HAND_SIZE
+
+    def _do_leave_shop(self) -> None:
+        assert self._run is not None
+        self._run.leave_shop()
+        if self._run.stage == GameStage.PRE_BLIND:
+            self._run.start_current_blind()
+
+    def _do_reroll_shop(self) -> None:
+        assert self._run is not None
+        self._run.reroll_shop()
+
+    def _do_buy_shop(self, idx: int) -> None:
+        assert self._run is not None
+        self._run.buy_shop_slot(idx)
 
     def _obs(self) -> np.ndarray:
         assert self._run is not None

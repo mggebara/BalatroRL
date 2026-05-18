@@ -39,7 +39,7 @@ class GameStage(Enum):
     """Top-level run state, driven by the Run state machine."""
     PRE_BLIND = "pre_blind"     # ready to start the current blind
     IN_ROUND = "in_round"       # round in progress
-    ROUND_WON = "round_won"     # round just won, ready to advance (no shop yet)
+    IN_SHOP = "in_shop"         # between blinds, player can buy/reroll/leave
     GAME_WON = "game_won"       # boss of max_ante beaten
     GAME_OVER = "game_over"     # run lost
 
@@ -165,6 +165,8 @@ class Run:
     (GAME_OVER).
     """
 
+    DEFAULT_JOKER_SLOTS = 5
+
     def __init__(
         self,
         deck_cards: list[Card] | None = None,
@@ -176,6 +178,8 @@ class Run:
         max_ante: int = 8,
         rng_seed: int | None = None,
         jokers: list[Joker] | None = None,
+        max_joker_slots: int = DEFAULT_JOKER_SLOTS,
+        shop_num_slots: int = 2,
     ) -> None:
         self._rng = random.Random(rng_seed)
         cards = deck_cards if deck_cards is not None else standard_deck()
@@ -188,8 +192,11 @@ class Run:
         self.max_ante = max_ante
         self.hand_levels: dict[HandType, int] = {}
         self.jokers: list[Joker] = list(jokers) if jokers else []
+        self.max_joker_slots = max_joker_slots
+        self.shop_num_slots = shop_num_slots
         self.current_blind: BlindKind = BlindKind.SMALL
         self.current_round: Round | None = None
+        self.current_shop = None  # balatro_core.shop.Shop | None — late import
         self.stage: GameStage = GameStage.PRE_BLIND
 
     def start_blind(self, blind: BlindKind) -> Round:
@@ -213,28 +220,64 @@ class Run:
 
     def start_current_blind(self) -> Round:
         """Begin the round at (ante, current_blind). Transitions to IN_ROUND."""
-        if self.stage not in (GameStage.PRE_BLIND, GameStage.ROUND_WON):
+        if self.stage != GameStage.PRE_BLIND:
             raise RuntimeError(f"cannot start blind from stage {self.stage}")
         self.current_round = self.start_blind(self.current_blind)
         self.stage = GameStage.IN_ROUND
         return self.current_round
 
     def advance_after_round_win(self) -> None:
-        """Move to next blind / next ante / GAME_WON.
+        """Pay out for the beaten round, generate a shop, transition to IN_SHOP.
 
-        No shop, no money rewards (Phase 3 stub). Callers responsible
-        for verifying the current round was actually won.
+        Caller must ensure the current round was actually won.
         """
+        from balatro_core.economy import end_of_round_payout
+        from balatro_core.shop import generate_shop
+
+        rd = self.current_round
+        if rd is None:
+            raise RuntimeError("no current round to advance from")
+        self.money += end_of_round_payout(
+            money_at_end=self.money,
+            blind=rd.state.blind,
+            hands_remaining=rd.state.hands_remaining,
+        )
+        self.current_round = None
+        self.current_shop = generate_shop(self._rng, num_slots=self.shop_num_slots)
+        self.stage = GameStage.IN_SHOP
+
+    def buy_shop_slot(self, idx: int) -> Joker:
+        """Buy joker at shop slot `idx`. Returns the joker added to inventory."""
+        if self.stage != GameStage.IN_SHOP or self.current_shop is None:
+            raise RuntimeError(f"buy_shop_slot from stage {self.stage}")
+        if len(self.jokers) >= self.max_joker_slots:
+            raise RuntimeError("joker slots full")
+        joker, new_money = self.current_shop.buy(idx, self.money)
+        self.money = new_money
+        self.jokers.append(joker)
+        return joker
+
+    def reroll_shop(self) -> None:
+        if self.stage != GameStage.IN_SHOP or self.current_shop is None:
+            raise RuntimeError(f"reroll_shop from stage {self.stage}")
+        from balatro_core.shop import reroll_jokers
+        new_jokers = reroll_jokers(self._rng, self.current_shop.slot_count)
+        self.money = self.current_shop.reroll(new_jokers, self.money)
+
+    def leave_shop(self) -> None:
+        """Close shop and advance to the next blind (or GAME_WON)."""
+        if self.stage != GameStage.IN_SHOP:
+            raise RuntimeError(f"leave_shop from stage {self.stage}")
+        self.current_shop = None
         if self.current_blind == BlindKind.SMALL:
             self.current_blind = BlindKind.BIG
             self.stage = GameStage.PRE_BLIND
         elif self.current_blind == BlindKind.BIG:
             self.current_blind = BlindKind.BOSS
             self.stage = GameStage.PRE_BLIND
-        else:  # BOSS won
+        else:  # BOSS just beaten
             if self.ante >= self.max_ante:
                 self.stage = GameStage.GAME_WON
-                self.current_round = None
                 return
             self.ante += 1
             self.current_blind = BlindKind.SMALL
@@ -243,6 +286,7 @@ class Run:
     def handle_round_loss(self) -> None:
         self.stage = GameStage.GAME_OVER
         self.current_round = None
+        self.current_shop = None
 
     @property
     def is_terminal(self) -> bool:

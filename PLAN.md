@@ -11,51 +11,59 @@ Update the **Status** section as phases complete.
 
 ## Status
 
-- **Current phase:** Phase 3 — Gym env + baselines, complete (with one
-  documented gap).
+- **Current phase:** Phase 4a — Shop layer complete. Phase 4b (PPO
+  MVP) is the next step.
 - **Last updated:** 2026-05-18
-- **Completed in Phase 3:**
-  - `balatro_env/` package: Gymnasium adapter (`BalatroEnv`), flat
-    `Discrete(10)` action space (8 toggles + play + discard), action
-    masking via `action_masks()` (sb3-contrib compatible) and
-    `info["action_mask"]`.
-  - 302-dim flat observation: padded hand tensor, selection bitmap,
-    counts/score progress, ante one-hot, blind one-hot, padded joker
-    slots, hand-level vector, deck rank/suit histograms.
-  - Engine extended with run-level state machine (`GameStage`,
-    `start_current_blind`, `advance_after_round_win`, `handle_round_loss`)
-    so the env can step through Small -> Big -> Boss across antes.
-  - `agents/`: `RandomAgent` (uniform over legal) and `GreedyAgent`
-    (brute-force best subset; toggle-then-commit plan, smart discard on
-    weak hands). Both implement `act(env, info)`.
-  - `scripts/eval_baselines.py`: configurable seed sweep, per-ante
-    win-rate report, three configurations (random, greedy no-jokers,
-    greedy + starter jokers).
-  - `gymnasium.utils.env_checker.check_env` passes — formal API
-    conformance gate.
-  - 18 new env tests (`balatro_env/tests/test_env.py`): API
-    conformance, observation shape, mask correctness across selection
-    sizes / hand sizes / hands+discards remaining, episode termination,
-    illegal-action surfacing, baseline smoke. **97 total tests
-    passing.**
-- **Phase 3 DoD scorecard:**
-  - `gym.make`-equivalent env passes `check_env`: **green.**
-  - Random + greedy baselines run end-to-end: **green.**
-  - Greedy beats Ante 3 > 50% on Red Deck: **not met without shop.**
-    No-joker greedy hits Ante 1 ~52%, Ante 2/3 0%. With 3 starter
-    jokers (Joker / Lusty / Sly) it hits 100% Ante 1+2 and 28% Ante 3.
-    With 5 strong starters it reliably reaches Ante 4. The gap is
-    joker accumulation between blinds (shop), not env quality.
-- **Known gap, deferred:** No shop layer. Until that ships, the
-  end-to-end agent can't accumulate the joker/hand-level pressure
-  Balatro requires beyond Ante 3-4. Implementing a minimal shop
-  (joker slots only, money/interest, reroll, skip) is the next
-  prerequisite for the Phase 5 win-rate targets.
-- **Next concrete task:** Phase 4 PPO MVP setup AND a minimal shop
-  layer. Recommend ordering: shop first (1 wk), then PPO on the
-  shop-enabled env (2 wk), so the agent has the same headroom Balatro
-  players do. Alternatively, run PPO on the no-shop env to validate
-  the training pipeline, then bolt on the shop.
+- **Completed in Phase 4a:**
+  - `balatro_core/economy.py`: end-of-round payout (blind reward + $1
+    per unused hand + interest at $1 per $5, cap $5).
+  - `balatro_core/shop.py`: `Shop` with N slots (default 2), flat $4
+    joker price, reroll cost starting at $5 with +$1 per reroll.
+  - `balatro_core/engine.py`: `GameStage.IN_SHOP`, `Run.current_shop`,
+    `Run.advance_after_round_win` now generates a shop instead of
+    advancing directly. New methods `buy_shop_slot`, `reroll_shop`,
+    `leave_shop`. Game flow is now PRE_BLIND -> IN_ROUND -> IN_SHOP
+    -> PRE_BLIND ... until GAME_WON / GAME_OVER.
+  - `balatro_env/action_space.py`: action space grows from
+    Discrete(10) to Discrete(14). New actions: LEAVE_SHOP, REROLL,
+    BUY_SLOT_0, BUY_SLOT_1. Mask is stage-dependent
+    (`compute_round_mask` / `compute_shop_mask`).
+  - `balatro_env/obs_encoder.py`: observation grows to 353 dims;
+    additions are stage one-hot[5], money[1], shop-slot tensor (2 x
+    22), reroll cost[1].
+  - `balatro_env/gym_env.py`: routes shop actions to engine methods;
+    transparently auto-starts the next blind on LEAVE_SHOP.
+  - `agents/greedy_agent.py`: in-shop strategy = buy first affordable
+    slot with a free joker slot, otherwise leave; no rerolls.
+  - 21 new tests (`balatro_core/tests/test_shop.py` + extended
+    `test_env.py`): interest math, shop buy/reroll mechanics, full
+    ante-loop state machine, shop-mask correctness across money /
+    slot / reroll conditions. **118 total tests passing.**
+- **Phase 3 DoD scorecard (revisited with shop in place):**
+  - `check_env`: **green.**
+  - Random + greedy baselines: **green.**
+  - Greedy beats Ante 3 > 50% on Red Deck: **GREEN — 66% with no
+    starter jokers, 82% with 3 starter jokers.** The shop layer was
+    the gating dependency for this DoD.
+- **Headroom signal (50 seeds each):**
+  - Random: 0% across all antes.
+  - Greedy no-jokers: 98 / 94 / 66 / 12 / 0 / 0 / 0 / 0% (Ante 1-8).
+  - Greedy + 3 starter jokers: 100 / 100 / 82 / 10 / 0 / 0 / 0 / 0%.
+  - The cliff at Ante 4-5 reflects exponential chip-target growth;
+    closing it requires Planet cards (hand-leveling), joker synergy,
+    rarity-aware shop decisions, and selective buying — exactly the
+    space RL should win in.
+- **Known gaps still open:**
+  - RNG bit-parity with the real game (Phase 2 gap, needs Balatrobot).
+  - Joker rarity / variable prices (currently flat $4).
+  - Booster packs, tarot / planet / spectral cards, vouchers, deck
+    modifications, skip-blind rewards. All deferred to later phases.
+- **Next concrete task:** Phase 4b — PPO MVP. Recommended setup:
+  CleanRL-style PPO with action masking via logit masking,
+  64 parallel envs, ~10M steps target. Start training on Ante 1-3
+  curriculum (matches the original Phase 4 DoD). Verify the pipeline
+  learns within a short (~100k step) sanity run, then queue the long
+  training run for offline execution.
 
 When resuming, read this section first, then the **Phase Plan** section
 to find the active phase.

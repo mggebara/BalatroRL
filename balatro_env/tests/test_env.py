@@ -7,11 +7,16 @@ from gymnasium.utils.env_checker import check_env
 
 from balatro_core.engine import GameStage
 from balatro_env.action_space import (
+    BUY_SHOP_ACTION_BASE,
     DISCARD_ACTION,
+    LEAVE_SHOP_ACTION,
     MAX_HAND_SIZE,
+    MAX_SHOP_SLOTS,
     NUM_ACTIONS,
     PLAY_ACTION,
-    compute_mask,
+    REROLL_SHOP_ACTION,
+    compute_round_mask,
+    compute_shop_mask,
     decode_action,
 )
 from balatro_env.gym_env import BalatroEnv
@@ -31,7 +36,7 @@ class TestEnvAPI:
 
     def test_action_space_size(self):
         env = BalatroEnv()
-        assert env.action_space.n == NUM_ACTIONS == 10
+        assert env.action_space.n == NUM_ACTIONS == 14
 
     def test_reset_returns_action_mask(self):
         env = BalatroEnv()
@@ -108,9 +113,60 @@ class TestActionDecoding:
 
 
 class TestMaskComputation:
+    def test_round_mask_disables_shop_actions(self):
+        sel = [True, False] + [False] * 6
+        m = compute_round_mask(
+            hand_size=8, selection=sel, selection_count=1,
+            hands_remaining=4, discards_remaining=4,
+        )
+        assert not m[LEAVE_SHOP_ACTION]
+        assert not m[REROLL_SHOP_ACTION]
+        for i in range(MAX_SHOP_SLOTS):
+            assert not m[BUY_SHOP_ACTION_BASE + i]
+
+    def test_shop_mask_disables_round_actions(self):
+        m = compute_shop_mask(
+            money=20, joker_slots_free=3,
+            shop_slot_filled=[True, True],
+            shop_slot_prices=[4, 4],
+            reroll_cost=5,
+        )
+        for i in range(MAX_HAND_SIZE):
+            assert not m[i]
+        assert not m[PLAY_ACTION]
+        assert not m[DISCARD_ACTION]
+        assert m[LEAVE_SHOP_ACTION]
+        assert m[REROLL_SHOP_ACTION]
+        assert m[BUY_SHOP_ACTION_BASE]
+        assert m[BUY_SHOP_ACTION_BASE + 1]
+
+    def test_shop_mask_too_poor_to_buy(self):
+        m = compute_shop_mask(
+            money=3, joker_slots_free=3,
+            shop_slot_filled=[True, True],
+            shop_slot_prices=[4, 4],
+            reroll_cost=5,
+        )
+        assert not m[REROLL_SHOP_ACTION]
+        assert not m[BUY_SHOP_ACTION_BASE]
+        assert not m[BUY_SHOP_ACTION_BASE + 1]
+        assert m[LEAVE_SHOP_ACTION]  # leave always legal
+
+    def test_shop_mask_no_joker_slots(self):
+        m = compute_shop_mask(
+            money=20, joker_slots_free=0,
+            shop_slot_filled=[True, True],
+            shop_slot_prices=[4, 4],
+            reroll_cost=5,
+        )
+        assert not m[BUY_SHOP_ACTION_BASE]
+        assert not m[BUY_SHOP_ACTION_BASE + 1]
+        assert m[LEAVE_SHOP_ACTION]
+        assert m[REROLL_SHOP_ACTION]  # still legal even if pointless
+
     def test_empty_selection_blocks_commit(self):
         sel = [False] * MAX_HAND_SIZE
-        m = compute_mask(
+        m = compute_round_mask(
             hand_size=8, selection=sel, selection_count=0,
             hands_remaining=4, discards_remaining=4,
         )
@@ -119,7 +175,7 @@ class TestMaskComputation:
 
     def test_full_selection_blocks_extra_toggles(self):
         sel = [True] * 5 + [False] * 3
-        m = compute_mask(
+        m = compute_round_mask(
             hand_size=8, selection=sel, selection_count=5,
             hands_remaining=4, discards_remaining=4,
         )
@@ -133,7 +189,7 @@ class TestMaskComputation:
 
     def test_no_hands_blocks_play(self):
         sel = [True, False] + [False] * 6
-        m = compute_mask(
+        m = compute_round_mask(
             hand_size=8, selection=sel, selection_count=1,
             hands_remaining=0, discards_remaining=4,
         )
@@ -142,7 +198,7 @@ class TestMaskComputation:
 
     def test_no_discards_blocks_discard(self):
         sel = [True, False] + [False] * 6
-        m = compute_mask(
+        m = compute_round_mask(
             hand_size=8, selection=sel, selection_count=1,
             hands_remaining=4, discards_remaining=0,
         )
@@ -151,7 +207,7 @@ class TestMaskComputation:
 
     def test_shorter_hand_disables_unused_toggles(self):
         sel = [False] * MAX_HAND_SIZE
-        m = compute_mask(
+        m = compute_round_mask(
             hand_size=5, selection=sel, selection_count=0,
             hands_remaining=4, discards_remaining=4,
         )

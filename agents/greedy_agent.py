@@ -1,15 +1,18 @@
 """Heuristic greedy baseline.
 
-Strategy:
+In-round strategy:
   - Brute-force the highest-scoring 1-5 card subset of the current hand
     (using the actual scoring pipeline, so jokers are accounted for).
   - If the best available hand is High Card or any Pair AND we have
     discards remaining AND more than one hand left, discard the 5
     lowest-rank cards instead of playing.
-  - The agent emits a sequence of TOGGLE actions to build the selection,
-    then a PLAY or DISCARD action to commit.
 
-This agent peeks at the underlying engine state via `env._run`. That
+Shop strategy:
+  - Buy the first affordable shop slot if a joker slot is free.
+  - Never reroll (keep it simple).
+  - Leave when nothing affordable / no joker slots left.
+
+The agent peeks at the underlying engine state via `env._run`. That
 is intentional for a baseline — RL agents see only the observation +
 info dict.
 """
@@ -19,11 +22,14 @@ import itertools
 from typing import Any
 
 from balatro_core.cards import Card
+from balatro_core.engine import GameStage
 from balatro_core.hands import HandType
 from balatro_core.scoring import score_played_hand
 
 from balatro_env.action_space import (
+    BUY_SHOP_ACTION_BASE,
     DISCARD_ACTION,
+    LEAVE_SHOP_ACTION,
     MAX_SELECTION,
     PLAY_ACTION,
 )
@@ -42,9 +48,19 @@ class GreedyAgent:
             return self._plan.pop(0)
 
         run = env._run
-        if run is None or run.current_round is None:
+        if run is None:
             return 0
 
+        if run.stage == GameStage.IN_SHOP:
+            return self._act_shop(env)
+        return self._act_round(env)
+
+    # ---- in-round ----
+
+    def _act_round(self, env: BalatroEnv) -> int:
+        run = env._run
+        if run is None or run.current_round is None:
+            return 0
         rd = run.current_round
         hand = rd.state.hand
         jokers = run.jokers
@@ -64,6 +80,19 @@ class GreedyAgent:
 
         self._plan = [int(i) for i in target_idx] + [int(commit)]
         return self._plan.pop(0)
+
+    # ---- shop ----
+
+    def _act_shop(self, env: BalatroEnv) -> int:
+        run = env._run
+        if run is None or run.current_shop is None:
+            return LEAVE_SHOP_ACTION
+        slots_free = run.max_joker_slots - len(run.jokers)
+        if slots_free > 0:
+            for i, slot in enumerate(run.current_shop.slots):
+                if slot.joker is not None and run.money >= slot.price:
+                    return BUY_SHOP_ACTION_BASE + i
+        return LEAVE_SHOP_ACTION
 
     @staticmethod
     def _best_play(
