@@ -8,9 +8,11 @@ from __future__ import annotations
 import random
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import Optional
 
 from balatro_core.cards import Card, Deck, standard_deck
 from balatro_core.hands import HandType
+from balatro_core.jokers import Joker
 from balatro_core.scoring import ScoreResult, score_played_hand
 
 
@@ -79,9 +81,13 @@ class Round:
         hands: int = 4,
         discards: int = 4,
         hand_levels: dict[HandType, int] | None = None,
+        jokers: list[Joker] | None = None,
+        rng: Optional[random.Random] = None,
     ) -> None:
         self.deck = deck
         self.hand_levels = hand_levels or {}
+        self.jokers: list[Joker] = list(jokers) if jokers else []
+        self._rng = rng
         self.state = RoundState(
             ante=ante,
             blind=blind,
@@ -115,7 +121,14 @@ class Round:
         if self.state.hands_remaining <= 0:
             raise RuntimeError("no hands remaining")
         played = self._remove_indices(indices)
-        result = score_played_hand(played, self.hand_levels)
+        result = score_played_hand(
+            played,
+            hand_levels=self.hand_levels,
+            held_cards=list(self.state.hand),
+            jokers=self.jokers,
+            discards_remaining=self.state.discards_remaining,
+            rng=self._rng,
+        )
         self.state.total_score += result.score
         self.state.hands_remaining -= 1
         self.state.score_log.append(result)
@@ -146,16 +159,18 @@ class Run:
         discards_per_round: int = 4,
         starting_ante: int = 1,
         rng_seed: int | None = None,
+        jokers: list[Joker] | None = None,
     ) -> None:
-        rng = random.Random(rng_seed)
+        self._rng = random.Random(rng_seed)
         cards = deck_cards if deck_cards is not None else standard_deck()
-        self.deck = Deck(cards, rng=rng)
+        self.deck = Deck(cards, rng=self._rng)
         self.money = starting_money
         self.hand_size = hand_size
         self.hands_per_round = hands_per_round
         self.discards_per_round = discards_per_round
         self.ante = starting_ante
         self.hand_levels: dict[HandType, int] = {}
+        self.jokers: list[Joker] = list(jokers) if jokers else []
 
     def start_blind(self, blind: BlindKind) -> Round:
         return Round(
@@ -166,4 +181,6 @@ class Run:
             hands=self.hands_per_round,
             discards=self.discards_per_round,
             hand_levels=self.hand_levels,
+            jokers=self.jokers,
+            rng=self._rng,
         )

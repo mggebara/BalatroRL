@@ -11,26 +11,46 @@ Update the **Status** section as phases complete.
 
 ## Status
 
-- **Current phase:** Phase 1 — Rules core skeleton, in progress.
-- **Last updated:** 2026-05-17
-- **Completed:**
-  - `balatro_core/` package scaffolded: cards, hands, scoring, engine.
-  - All 12 hand types detected and scored at level 1; level scaling
-    implemented and tested at levels 2, 3, 5.
-  - Engine: `Run` / `Round` / `Blind` with play/discard/draw and per-ante
-    chip targets (Ante 1-8).
-  - 36 pytest tests passing (18 hand-evaluation, 13 scoring scenarios
-    covering every hand type, 5 hand-level value tests).
-  - `scripts/smoke_ante1.py` plays a scripted Ante 1 end-to-end with a
-    brute-force greedy + simple discard heuristic. Beats Ante 1 on
-    several test seeds (e.g. 1, 42); loses on others (e.g. 7, 13, 100) —
-    which is expected for a non-RL agent and confirms the engine handles
-    both win and loss paths.
-- **Next concrete task:** Phase 1 wrap-up — decide whether to expand the
-  rules core (booster/shop stubs, money/interest) before moving to
-  Phase 2 (RNG parity + first 20 jokers). The current core is a solid
-  base for Phase 2; the shop stubs are deferrable until Phase 3 when the
-  Gym adapter starts needing them.
+- **Current phase:** Phase 2 — RNG parity + first 20 jokers, in progress.
+- **Last updated:** 2026-05-18
+- **Completed in Phase 2:**
+  - Joker base class with three hooks: `on_scoring_card`,
+    `on_held_card`, `on_main`. Hooks fire in canonical order (per
+    scoring card LR, per held card LR, per joker LR).
+  - All 20 Phase-2 jokers implemented in `balatro_core/jokers.py`:
+    Joker, Greedy/Lusty/Wrathful/Gluttonous, Jolly/Zany/Mad/Crazy/Droll,
+    Sly/Wily/Clever/Devious/Crafty, Half, Mime, Credit Card, Banner,
+    Misprint. "Contains" jokers use frozenset membership against the
+    detected hand type.
+  - Scoring pipeline refactored: `score_played_hand` now takes
+    `held_cards`, `jokers`, `discards_remaining`, `rng`. Phase 1 callers
+    work unchanged (all defaults).
+  - `Run` and `Round` carry jokers and an injected RNG; play() routes
+    through the new scoring pipeline.
+  - 43 new tests in `test_jokers.py`: per-joker isolation tests, plus
+    properties (score invariant under joker reorder, every class
+    instantiable, names unique, suit-jokers fire only on matching suit,
+    non-per-card jokers do not mutate ctx in on_scoring_card).
+  - `rng.py` stub: deterministic `BalatroRNG` keyed by
+    `(run_seed, context)`, structurally correct but **NOT bit-parity
+    verified** (flagged below).
+  - Smoke script extended to accept jokers via CLI; seed 7 went from
+    losing 444/450 (no jokers) to winning 632/600 (+4 Joker) — confirms
+    the wiring end-to-end.
+  - Test suite: 79 passing (Phase 1 + Phase 2).
+- **Known gap (cannot complete in this environment):** Golden traces.
+  The Phase 2 DoD calls for 20 Balatrobot traces replaying bit-identical.
+  That requires capturing traces from the real game via the Balatrobot
+  Lua mod, which isn't available in the remote execution sandbox. The
+  test harness for trace replay should ship in a follow-up session run
+  on a machine with Balatro + Balatrobot installed.
+- **Next concrete task:** EITHER (a) Phase 2 trace-capture work on a
+  local-game-enabled machine, OR (b) advance to Phase 3 (Gym env +
+  baselines) and revisit traces when an environment with game access is
+  available. Recommend (b): Phase 3 doesn't depend on bit-parity RNG,
+  and getting an end-to-end RL pipeline up unlocks the bigger validation
+  signal (does the agent improve?). Treat the RNG-parity gap as
+  technical debt logged against Phase 2.
 
 When resuming, read this section first, then the **Phase Plan** section
 to find the active phase.
