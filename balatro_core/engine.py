@@ -35,6 +35,15 @@ class BlindKind(Enum):
     BOSS = "Boss Blind"
 
 
+class GameStage(Enum):
+    """Top-level run state, driven by the Run state machine."""
+    PRE_BLIND = "pre_blind"     # ready to start the current blind
+    IN_ROUND = "in_round"       # round in progress
+    ROUND_WON = "round_won"     # round just won, ready to advance (no shop yet)
+    GAME_WON = "game_won"       # boss of max_ante beaten
+    GAME_OVER = "game_over"     # run lost
+
+
 _BLIND_MULTIPLIERS: dict[BlindKind, float] = {
     BlindKind.SMALL: 1.0,
     BlindKind.BIG: 1.5,
@@ -148,7 +157,13 @@ class Round:
 
 
 class Run:
-    """Top-level run. Phase 1: deck + ante counter only."""
+    """Top-level run with a multi-blind state machine.
+
+    Phase 1: no shop, no money rewards between blinds — just play
+    through Small -> Big -> Boss -> next ante -> ... until either
+    the boss of `max_ante` is beaten (GAME_WON) or a round is lost
+    (GAME_OVER).
+    """
 
     def __init__(
         self,
@@ -158,6 +173,7 @@ class Run:
         hands_per_round: int = 4,
         discards_per_round: int = 4,
         starting_ante: int = 1,
+        max_ante: int = 8,
         rng_seed: int | None = None,
         jokers: list[Joker] | None = None,
     ) -> None:
@@ -169,10 +185,18 @@ class Run:
         self.hands_per_round = hands_per_round
         self.discards_per_round = discards_per_round
         self.ante = starting_ante
+        self.max_ante = max_ante
         self.hand_levels: dict[HandType, int] = {}
         self.jokers: list[Joker] = list(jokers) if jokers else []
+        self.current_blind: BlindKind = BlindKind.SMALL
+        self.current_round: Round | None = None
+        self.stage: GameStage = GameStage.PRE_BLIND
 
     def start_blind(self, blind: BlindKind) -> Round:
+        """Construct (but do not register) a Round for the given blind.
+
+        Used by the Phase 1 smoke test and by `start_current_blind` below.
+        """
         return Round(
             deck=self.deck,
             ante=self.ante,
@@ -184,3 +208,42 @@ class Run:
             jokers=self.jokers,
             rng=self._rng,
         )
+
+    # ---- Run state machine ----
+
+    def start_current_blind(self) -> Round:
+        """Begin the round at (ante, current_blind). Transitions to IN_ROUND."""
+        if self.stage not in (GameStage.PRE_BLIND, GameStage.ROUND_WON):
+            raise RuntimeError(f"cannot start blind from stage {self.stage}")
+        self.current_round = self.start_blind(self.current_blind)
+        self.stage = GameStage.IN_ROUND
+        return self.current_round
+
+    def advance_after_round_win(self) -> None:
+        """Move to next blind / next ante / GAME_WON.
+
+        No shop, no money rewards (Phase 3 stub). Callers responsible
+        for verifying the current round was actually won.
+        """
+        if self.current_blind == BlindKind.SMALL:
+            self.current_blind = BlindKind.BIG
+            self.stage = GameStage.PRE_BLIND
+        elif self.current_blind == BlindKind.BIG:
+            self.current_blind = BlindKind.BOSS
+            self.stage = GameStage.PRE_BLIND
+        else:  # BOSS won
+            if self.ante >= self.max_ante:
+                self.stage = GameStage.GAME_WON
+                self.current_round = None
+                return
+            self.ante += 1
+            self.current_blind = BlindKind.SMALL
+            self.stage = GameStage.PRE_BLIND
+
+    def handle_round_loss(self) -> None:
+        self.stage = GameStage.GAME_OVER
+        self.current_round = None
+
+    @property
+    def is_terminal(self) -> bool:
+        return self.stage in (GameStage.GAME_WON, GameStage.GAME_OVER)

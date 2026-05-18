@@ -3,7 +3,10 @@ name = "balatrorl"
 version = "0.1.0"
 description = "Reinforcement learning agent for Balatro"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+    "gymnasium>=1.0",
+    "numpy>=1.26",
+]
 
 [project.optional-dependencies]
 dev = ["pytest>=7.0"]
@@ -13,8 +16,8 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-include = ["balatro_core*", "balatro_env*"]
+include = ["balatro_core*", "balatro_env*", "agents*"]
 
 [tool.pytest.ini_options]
-testpaths = ["balatro_core/tests"]
+testpaths = ["balatro_core/tests", "balatro_env/tests"]
 pythonpath = ["."]

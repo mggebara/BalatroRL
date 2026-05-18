@@ -11,46 +11,51 @@ Update the **Status** section as phases complete.
 
 ## Status
 
-- **Current phase:** Phase 2 — RNG parity + first 20 jokers, in progress.
+- **Current phase:** Phase 3 — Gym env + baselines, complete (with one
+  documented gap).
 - **Last updated:** 2026-05-18
-- **Completed in Phase 2:**
-  - Joker base class with three hooks: `on_scoring_card`,
-    `on_held_card`, `on_main`. Hooks fire in canonical order (per
-    scoring card LR, per held card LR, per joker LR).
-  - All 20 Phase-2 jokers implemented in `balatro_core/jokers.py`:
-    Joker, Greedy/Lusty/Wrathful/Gluttonous, Jolly/Zany/Mad/Crazy/Droll,
-    Sly/Wily/Clever/Devious/Crafty, Half, Mime, Credit Card, Banner,
-    Misprint. "Contains" jokers use frozenset membership against the
-    detected hand type.
-  - Scoring pipeline refactored: `score_played_hand` now takes
-    `held_cards`, `jokers`, `discards_remaining`, `rng`. Phase 1 callers
-    work unchanged (all defaults).
-  - `Run` and `Round` carry jokers and an injected RNG; play() routes
-    through the new scoring pipeline.
-  - 43 new tests in `test_jokers.py`: per-joker isolation tests, plus
-    properties (score invariant under joker reorder, every class
-    instantiable, names unique, suit-jokers fire only on matching suit,
-    non-per-card jokers do not mutate ctx in on_scoring_card).
-  - `rng.py` stub: deterministic `BalatroRNG` keyed by
-    `(run_seed, context)`, structurally correct but **NOT bit-parity
-    verified** (flagged below).
-  - Smoke script extended to accept jokers via CLI; seed 7 went from
-    losing 444/450 (no jokers) to winning 632/600 (+4 Joker) — confirms
-    the wiring end-to-end.
-  - Test suite: 79 passing (Phase 1 + Phase 2).
-- **Known gap (cannot complete in this environment):** Golden traces.
-  The Phase 2 DoD calls for 20 Balatrobot traces replaying bit-identical.
-  That requires capturing traces from the real game via the Balatrobot
-  Lua mod, which isn't available in the remote execution sandbox. The
-  test harness for trace replay should ship in a follow-up session run
-  on a machine with Balatro + Balatrobot installed.
-- **Next concrete task:** EITHER (a) Phase 2 trace-capture work on a
-  local-game-enabled machine, OR (b) advance to Phase 3 (Gym env +
-  baselines) and revisit traces when an environment with game access is
-  available. Recommend (b): Phase 3 doesn't depend on bit-parity RNG,
-  and getting an end-to-end RL pipeline up unlocks the bigger validation
-  signal (does the agent improve?). Treat the RNG-parity gap as
-  technical debt logged against Phase 2.
+- **Completed in Phase 3:**
+  - `balatro_env/` package: Gymnasium adapter (`BalatroEnv`), flat
+    `Discrete(10)` action space (8 toggles + play + discard), action
+    masking via `action_masks()` (sb3-contrib compatible) and
+    `info["action_mask"]`.
+  - 302-dim flat observation: padded hand tensor, selection bitmap,
+    counts/score progress, ante one-hot, blind one-hot, padded joker
+    slots, hand-level vector, deck rank/suit histograms.
+  - Engine extended with run-level state machine (`GameStage`,
+    `start_current_blind`, `advance_after_round_win`, `handle_round_loss`)
+    so the env can step through Small -> Big -> Boss across antes.
+  - `agents/`: `RandomAgent` (uniform over legal) and `GreedyAgent`
+    (brute-force best subset; toggle-then-commit plan, smart discard on
+    weak hands). Both implement `act(env, info)`.
+  - `scripts/eval_baselines.py`: configurable seed sweep, per-ante
+    win-rate report, three configurations (random, greedy no-jokers,
+    greedy + starter jokers).
+  - `gymnasium.utils.env_checker.check_env` passes — formal API
+    conformance gate.
+  - 18 new env tests (`balatro_env/tests/test_env.py`): API
+    conformance, observation shape, mask correctness across selection
+    sizes / hand sizes / hands+discards remaining, episode termination,
+    illegal-action surfacing, baseline smoke. **97 total tests
+    passing.**
+- **Phase 3 DoD scorecard:**
+  - `gym.make`-equivalent env passes `check_env`: **green.**
+  - Random + greedy baselines run end-to-end: **green.**
+  - Greedy beats Ante 3 > 50% on Red Deck: **not met without shop.**
+    No-joker greedy hits Ante 1 ~52%, Ante 2/3 0%. With 3 starter
+    jokers (Joker / Lusty / Sly) it hits 100% Ante 1+2 and 28% Ante 3.
+    With 5 strong starters it reliably reaches Ante 4. The gap is
+    joker accumulation between blinds (shop), not env quality.
+- **Known gap, deferred:** No shop layer. Until that ships, the
+  end-to-end agent can't accumulate the joker/hand-level pressure
+  Balatro requires beyond Ante 3-4. Implementing a minimal shop
+  (joker slots only, money/interest, reroll, skip) is the next
+  prerequisite for the Phase 5 win-rate targets.
+- **Next concrete task:** Phase 4 PPO MVP setup AND a minimal shop
+  layer. Recommend ordering: shop first (1 wk), then PPO on the
+  shop-enabled env (2 wk), so the agent has the same headroom Balatro
+  players do. Alternatively, run PPO on the no-shop env to validate
+  the training pipeline, then bolt on the shop.
 
 When resuming, read this section first, then the **Phase Plan** section
 to find the active phase.
