@@ -6,6 +6,7 @@ requires-python = ">=3.11"
 dependencies = [
     "gymnasium>=1.0",
     "numpy>=1.26",
+    "torch>=2.0",
 ]
 
 [project.optional-dependencies]
@@ -19,5 +20,6 @@ build-backend = "setuptools.build_meta"
 include = ["balatro_core*", "balatro_env*", "agents*"]
 
 [tool.pytest.ini_options]
-testpaths = ["balatro_core/tests", "balatro_env/tests"]
+testpaths = ["balatro_core/tests", "balatro_env/tests", "training/tests"]
 pythonpath = ["."]
+markers = ["slow: longer-running tests (e.g., short PPO training)"]

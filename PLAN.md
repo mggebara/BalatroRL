@@ -11,9 +11,64 @@ Update the **Status** section as phases complete.
 
 ## Status
 
-- **Current phase:** Phase 4a — Shop layer complete. Phase 4b (PPO
-  MVP) is the next step.
+- **Current phase:** Phase 4b — PPO MVP pipeline shipped; convergence
+  to DoD targets requires longer training (queued for a future
+  session).
 - **Last updated:** 2026-05-18
+- **Completed in Phase 4b:**
+  - `training/ppo.py`: single-file CleanRL-style PPO. MLP actor-critic
+    (2 hidden tanh layers, default 256 units), invalid-action masking
+    via −∞ logits applied uniformly to sampling, log-prob, and
+    entropy. SyncVectorEnv with N parallel envs. Linear LR anneal,
+    GAE, clipped value loss, gradient clipping. Full config via CLI
+    args. Saves `policy.pt`, `config.json`, `history.json` per run.
+  - `training/eval_policy.py`: loads a saved policy, runs N seeds with
+    the same per-ante reporting as the baseline eval script — direct
+    PPO-vs-baseline comparison.
+  - 5 PPO unit tests (`training/tests/test_ppo.py`): illegal actions
+    have zero sampled probability over 200 samples; masked log-probs
+    finite and entropy ≤ log(legal); single-legal-action entropy ~0;
+    `_info_to_mask` handles array and missing-key inputs.
+  - **Training pipeline verified at ~3k steps/sec on CPU.** Two
+    training runs executed:
+    - max_ante=1 + 5 starter jokers, 500k steps → 80% Ante-1 win rate.
+    - max_ante=3 + 5 starter jokers, 1M steps → 67 / 10 / 0%
+      (Ante 1 / 2 / 3).
+  - **Reproducibility:** all hparams in `config.json`; seeded RNG
+    everywhere; same command + seed reproduces the run.
+- **Phase 4 DoD scorecard:**
+  - Training reproducible from a single config + seed: **green.**
+  - PPO beats greedy baseline by ≥20pp on Ante 3 win rate: **NOT
+    MET.** At 1M steps PPO hits 0% Ante 3 vs greedy's 82% (with same
+    3 starter jokers; greedy is brute-force optimal per turn).
+  - >90% Ante 3 win rate with the 20-joker pool: **NOT MET.**
+- **Comparison on max_ante=1 + 5 starter jokers, 100 seeds:**
+  - Random: **2%**
+  - PPO (500k steps): **80%**
+  - Greedy: **100%**
+  - PPO beats random by +78pp; trails greedy by 20pp.
+- **Why PPO trails greedy:** the greedy peeks at engine state and
+  brute-forces the per-turn optimal play, while PPO sees only the obs
+  vector and must learn card→hand value through gradient updates. The
+  gap should close with (a) ~10× more training steps, (b) recurrent
+  policy for long-horizon credit assignment across 9 blinds and 3
+  shops per Ante-3 run, (c) sharper reward shaping that rewards
+  joker accumulation explicitly, (d) curriculum (start Ante 1, then
+  unlock 2, then 3).
+- **Honest reminder about all numbers in this doc:** they come from
+  our Python simulator (`balatro_core/` + `balatro_env/`), not the
+  real game. RNG bit-parity with Balatro is still pending Balatrobot
+  access (Phase 2 gap).
+- **Next concrete task:** Phase 4b convergence work. Three threads
+  in parallel: (1) staged curriculum (max_ante=1 → 2 → 3, transfer
+  weights), (2) recurrent policy (GRU on the trunk), (3) reward
+  shaping ablation — log-score relative to a moving baseline rather
+  than raw chip-target. Target a single 10M-step run that beats
+  greedy on Ante 3 by ≥20pp. Once green, advance to Phase 5
+  (expand to 60 jokers + full Ante 1-8).
+
+When resuming, read this section first, then the **Phase Plan** section
+to find the active phase.
 - **Completed in Phase 4a:**
   - `balatro_core/economy.py`: end-of-round payout (blind reward + $1
     per unused hand + interest at $1 per $5, cap $5).
