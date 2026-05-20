@@ -55,12 +55,14 @@ class BalatroEnv(gym.Env):
         max_ante: int = 8,
         starting_jokers: Optional[list[Joker]] = None,
         shaping_coef: float = 0.05,
+        blind_win_bonus: float = 0.0,
         render_mode: Optional[str] = None,
     ) -> None:
         super().__init__()
         self.max_ante = max_ante
         self._starting_jokers = starting_jokers or []
         self.shaping_coef = shaping_coef
+        self.blind_win_bonus = blind_win_bonus
         self.render_mode = render_mode
 
         self._run: Optional[Run] = None
@@ -212,6 +214,8 @@ class BalatroEnv(gym.Env):
         }
         # Round transition: won (-> shop), lost (-> game over), or continue.
         if rd.state.is_won:
+            reward += self.blind_win_bonus
+            info["blind_won"] = rd.state.blind.value
             self._run.advance_after_round_win()
         elif rd.state.is_lost:
             self._run.handle_round_loss()

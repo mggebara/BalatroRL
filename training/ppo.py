@@ -64,9 +64,11 @@ class PPOConfig:
     max_grad_norm: float = 0.5
     hidden_size: int = 256
     max_ante: int = 3
+    blind_win_bonus: float = 0.0
     log_every: int = 1
     save_dir: str = "training/runs/default"
     starting_jokers: tuple[str, ...] = field(default_factory=tuple)
+    load_policy: str = ""  # path to a previously saved policy.pt; empty = fresh init
 
 
 def _build_starting_jokers(names: tuple[str, ...]):
@@ -86,11 +88,18 @@ def _build_starting_jokers(names: tuple[str, ...]):
     return out
 
 
-def make_env(seed: int, idx: int, max_ante: int, starting_jokers_names: tuple[str, ...]):
+def make_env(
+    seed: int,
+    idx: int,
+    max_ante: int,
+    starting_jokers_names: tuple[str, ...],
+    blind_win_bonus: float = 0.0,
+):
     def thunk():
         env = BalatroEnv(
             max_ante=max_ante,
             starting_jokers=_build_starting_jokers(starting_jokers_names),
+            blind_win_bonus=blind_win_bonus,
         )
         env.action_space.seed(seed + idx)
         env.observation_space.seed(seed + idx)
@@ -174,9 +183,11 @@ def parse_args() -> PPOConfig:
     p.add_argument("--max-grad-norm", type=float, default=d.max_grad_norm)
     p.add_argument("--hidden-size", type=int, default=d.hidden_size)
     p.add_argument("--max-ante", type=int, default=d.max_ante)
+    p.add_argument("--blind-win-bonus", type=float, default=d.blind_win_bonus)
     p.add_argument("--log-every", type=int, default=d.log_every)
     p.add_argument("--save-dir", type=str, default=d.save_dir)
     p.add_argument("--starting-jokers", nargs="*", default=list(d.starting_jokers))
+    p.add_argument("--load-policy", type=str, default=d.load_policy)
     args = vars(p.parse_args())
     args["starting_jokers"] = tuple(args["starting_jokers"])
     return PPOConfig(**args)
@@ -196,12 +207,19 @@ def train(cfg: PPOConfig) -> dict:
         json.dump(dataclasses.asdict(cfg), f, indent=2)
 
     envs = gym.vector.SyncVectorEnv(
-        [make_env(cfg.seed, i, cfg.max_ante, cfg.starting_jokers) for i in range(cfg.num_envs)]
+        [
+            make_env(cfg.seed, i, cfg.max_ante, cfg.starting_jokers, cfg.blind_win_bonus)
+            for i in range(cfg.num_envs)
+        ]
     )
     obs_dim = envs.single_observation_space.shape[0]
     num_actions = envs.single_action_space.n
 
     agent = MaskedActorCritic(obs_dim, num_actions, hidden=cfg.hidden_size).to(device)
+    if cfg.load_policy:
+        state = torch.load(cfg.load_policy, map_location=device, weights_only=True)
+        agent.load_state_dict(state)
+        print(f"Loaded initial weights from {cfg.load_policy}")
     optimizer = optim.Adam(agent.parameters(), lr=cfg.learning_rate, eps=1e-5)
 
     # Storage

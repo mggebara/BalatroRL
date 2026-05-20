@@ -11,10 +11,74 @@ Update the **Status** section as phases complete.
 
 ## Status
 
-- **Current phase:** Phase 4b — PPO MVP pipeline shipped; convergence
-  to DoD targets requires longer training (queued for a future
-  session).
-- **Last updated:** 2026-05-18
+- **Current phase:** Phase 4b — PPO MVP pipeline + curriculum
+  infrastructure shipped. Ante 3 win-rate DoD still not met;
+  convergence work continues.
+- **Last updated:** 2026-05-19
+- **New in this session:**
+  - `BalatroEnv` gained `blind_win_bonus` (default 0.0) — per-blind
+    intermediate reward to densify the signal across the ~50-step
+    Ante-3 horizon.
+  - `training/ppo.py` gained `--load-policy` for weight transfer
+    between training stages.
+  - Ran a 3-stage curriculum (Ante 1 → 2 → 3, weights transferred
+    forward, bonus=0.1, 5 starter jokers). 100-seed eval after each
+    stage:
+    - **Stage 1** (max_ante=1, 500k steps): 85% Ante 1.
+    - **Stage 2** (max_ante=2, +1M steps, transfer): 90 / 37% (Ante 1/2).
+    - **Stage 3** (max_ante=3, +1.5M steps, transfer): 83 / 23 / 0%.
+  - **Outcome:** staging clearly helped Ante 2 (0% → 37%) and
+    Ante 1 over baseline. Ante 3 still at 0%. Stage 3 entropy
+    collapsed to 0.41 and value loss to 0.003 — a deterministic
+    local-optimum policy that isn't the winning one, and that
+    catastrophically forgot a few percentage points on Ante 1/2
+    while reaching for Ante 3.
+
+- **Comparison snapshot (max_ante=3 + 5 starter jokers, 100 seeds):**
+  | Agent | Ante 1 | Ante 2 | Ante 3 |
+  |---|---|---|---|
+  | Random | ~2% | ~0% | 0% |
+  | PPO direct (1M) | 67% | 10% | 0% |
+  | PPO staged (3M total) | 83% | 23% | 0% |
+  | Greedy | 100% | 100% | 82% |
+
+- **Phase 4 DoD scorecard (unchanged):**
+  - Training reproducible from a single config + seed: **green.**
+  - PPO beats greedy baseline by ≥20pp on Ante 3 win rate:
+    **NOT MET** — gap is in the wrong direction (~80pp behind).
+  - >90% Ante 3 win rate with the 20-joker pool: **NOT MET.**
+
+- **What this session ruled out:** "just train longer / add a
+  per-blind bonus / stage the curriculum" is necessary but not
+  sufficient. The agent finds a deterministic policy that captures
+  most per-blind shaped reward but fails to invest in the
+  long-horizon decisions (shop purchases, discard timing across
+  multiple blinds) that make Ante 3 winnable.
+
+- **What's next (in priority order):**
+  1. **Recurrent policy** (GRU on the trunk + truncated BPTT across
+     `num_steps` chunks). Highest expected impact: the env genuinely
+     needs memory of past plays / past shops / accumulated jokers
+     beyond what one obs vector encodes.
+  2. **Entropy floor / KL-target restart** to prevent the entropy
+     collapse seen at Stage 3.
+  3. **Imitation bootstrap from greedy demos** — collect ~10k
+     greedy trajectories, pre-train the policy with behavioral
+     cloning, then fine-tune with PPO. Bypasses the cold-start
+     exploration cliff at Ante 3.
+  4. **Reward shaping ablation** — measure if `blind_win_bonus`
+     is actually helping or just inflating returns without driving
+     policy improvement. Earlier 80% Ante-1 result used bonus=0,
+     this session's 85% used bonus=0.1 — small delta.
+  5. Possibly move to vector envs at 32+ instances and 10M steps;
+     CPU sim runs at ~3k sps so a 10M run is ~1 hour.
+
+- **Honest reminder:** all numbers come from our Python simulator,
+  not the real Balatro game. RNG bit-parity gap (Phase 2) is still
+  open.
+
+When resuming, read this section first, then the **Phase Plan** section
+to find the active phase.
 - **Completed in Phase 4b:**
   - `training/ppo.py`: single-file CleanRL-style PPO. MLP actor-critic
     (2 hidden tanh layers, default 256 units), invalid-action masking
