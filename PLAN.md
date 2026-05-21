@@ -11,10 +11,67 @@ Update the **Status** section as phases complete.
 
 ## Status
 
-- **Current phase:** Phase 4b — PPO MVP pipeline + curriculum
-  infrastructure shipped. Ante 3 win-rate DoD still not met;
-  convergence work continues.
-- **Last updated:** 2026-05-19
+- **Current phase:** Phase 4b — Recurrent PPO infrastructure
+  shipped. Ante 3 win-rate DoD still not met; per-architecture
+  characterization continues.
+- **Last updated:** 2026-05-19 (recurrent added later same day)
+- **New in this session (recurrent thread):**
+  - `training/ppo_recurrent.py`: `MaskedRecurrentActorCritic` with a
+    GRU layer on top of the MLP trunk. Hidden state is gated by
+    `done` at each step both during rollout (in `act`) and during
+    minibatch replay (in `evaluate`), so episode boundaries
+    correctly zero memory in both passes. Minibatches are env-major
+    (whole envs preserved as time sequences) so truncated BPTT
+    across `num_steps` chunks is well-defined.
+  - 4 new unit tests in `training/tests/test_ppo_recurrent.py`:
+    illegal-action masking holds with GRU output, `prev_done=1`
+    zeros incoming hidden state (verified by equivalence to a
+    zero-initialized run), `prev_done=0` preserves it (verified by
+    inequivalence), and `evaluate` returns the expected shapes.
+  - `training/eval_policy.py` auto-detects MLP vs recurrent from
+    the state-dict keys, so the same CLI runs both architectures.
+  - Trained one 500k-step recurrent run on the same config used for
+    the MLP Stage 1 (max_ante=1, 5 starter jokers, bonus=0.1).
+    **Result:** 76% Ante 1. The MLP under the same config and
+    step count hit 85%.
+- **Recurrent vs MLP scorecard (100 seeds, max_ante=1, 5 jokers):**
+  | Model | Steps | Wall-clock | Ante 1 |
+  |---|---|---|---|
+  | MLP | 500k | ~3 min | **85%** |
+  | Recurrent (GRU 128) | 500k | ~18 min | 76% |
+- **Honest read of the recurrent result:**
+  - Recurrent did NOT beat MLP on Ante 1 at matched step count.
+    Plausible because the Ante-1 horizon (≤ ~25 env steps,
+    Markov-enough obs) doesn't reward memory.
+  - Throughput dropped 6.5× — sequential GRU replay is the cost.
+    Per wall-clock minute, MLP gets ~7× more training steps.
+  - The thesis "recurrent helps Ante 3 long-horizon credit
+    assignment" remains untested. A fair recurrent-vs-MLP comparison
+    on Ante 3 would need either (a) 3M+ recurrent steps (~2 hours)
+    or (b) a head-to-head wall-clock-matched experiment showing
+    recurrent reaches higher win rate per minute.
+- **Phase 4 DoD scorecard (unchanged):**
+  - Training reproducible from a single config + seed: **green.**
+  - PPO beats greedy baseline by ≥20pp on Ante 3 win rate: **NOT MET.**
+  - >90% Ante 3 win rate with the 20-joker pool: **NOT MET.**
+- **Updated priority order for next session:**
+  1. **Greedy-imitation bootstrap** (now top, leapfrogs recurrent).
+     Collect ~10k greedy trajectories, pretrain the MLP policy via
+     behavioral cloning (cross-entropy on greedy's masked actions),
+     then PPO fine-tune. Bypasses the cold-start exploration cliff
+     and gives the value head a sensible starting point.
+  2. **Recurrent on Ante 3 with 3M+ steps** — only worth doing
+     after the MLP imitation-bootstrap path establishes a working
+     baseline at Ante 3.
+  3. **Entropy floor + KL-target** to prevent the Stage 3
+     determinism collapse.
+  4. **Reward shaping ablation** — does `blind_win_bonus` actually
+     improve policy or just inflate returns?
+- **Honest reminder (unchanged):** all numbers come from our Python
+  simulator. RNG bit-parity gap (Phase 2) is still open.
+
+When resuming, read this section first, then the **Phase Plan** section
+to find the active phase.
 - **New in this session:**
   - `BalatroEnv` gained `blind_win_bonus` (default 0.0) — per-blind
     intermediate reward to densify the signal across the ~50-step
